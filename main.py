@@ -29,14 +29,15 @@ dp.middleware.setup(LoggingMiddleware())
 # Улучшенный фильтр YouTube ссылок
 class YouTubeFilter(BoundFilter):
     async def check(self, message: types.Message) -> bool:
-        if not message.text:
+        if not message.text or message.text.startswith('/'):
             return False
             
         patterns = [
-            r'(https?://)?(www\.)?youtube\.com/watch\?v=([^&%\s]+)',
-            r'(https?://)?(www\.)?youtu\.be/([^&\s]+)',
-            r'(https?://)?(www\.)?youtube\.com/shorts/([^&\s]+)',
-            r'(https?://)?(www\.)?youtube\.com/embed/([^&\s]+)'
+            r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([^&\s]+)',
+            r'(?:https?://)?(?:www\.)?youtu\.be/([^?\s]+)',
+            r'(?:https?://)?(?:www\.)?youtube\.com/shorts/([^?\s]+)',
+            r'(?:https?://)?(?:www\.)?youtube\.com/embed/([^?\s]+)',
+            r'(?:https?://)?(?:www\.)?youtube\.com/live/([^?\s]+)'
         ]
         
         return any(re.search(pattern, message.text, re.IGNORECASE) for pattern in patterns)
@@ -147,62 +148,80 @@ async def handle_youtube(message: types.Message):
         user = message.from_user
         sheet = get_sheet()
         
-        logger.info(f"Новая YouTube ссылка от {user.id}: {message.text}")
+        # Извлекаем чистую ссылку без параметров
+        url = message.text.split('?')[0].split('&')[0]
+        logger.info(f"Новая YouTube ссылка от {user.id}: {url}")
         
+        # Добавляем запись в таблицу
         sheet.append_row([
             user.username or "Аноним",
             user.id,
-            message.text,
+            url,
             datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         ])
         
         stats = await generate_stats(user.id)
-        await message.answer(f"✅ Ссылка сохранена!\n{stats}", parse_mode='HTML')
+        await message.answer(f"✅ Ссылка успешно сохранена!\n{stats}", parse_mode='HTML')
         
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Ошибка Google Sheets: {e}")
+        await message.answer("❌ Ошибка доступа к таблице. Попробуйте позже.")
     except Exception as e:
-        logger.error(f"Ошибка обработки YouTube ссылки: {e}")
-        await message.answer("❌ Не удалось сохранить ссылку")
+        logger.error(f"Ошибка обработки ссылки: {e}", exc_info=True)
+        await message.answer(
+            "❌ Произошла ошибка при сохранении ссылки\n"
+            "Попробуйте другую ссылку или повторите позже"
+        )
 
-# Обработчик прочих сообщений
-@dp.message_handler(content_types=types.ContentTypes.TEXT)
-async def handle_other(message: types.Message):
-    logger.info(f"Получено не-Youtube сообщение: {message.text}")
-    await message.answer("🚫 Я принимаю только YouTube-ссылки")
-    await message.delete()
-
-# Тестовая команда для проверки
+# Обработчик команды /test
 @dp.message_handler(commands=['test'])
 async def test_command(message: types.Message):
     try:
+        # Проверка подключения к Google Sheets
         sheet = get_sheet()
+        records = sheet.get_all_records()
+        
+        # Проверка текущего пользователя
+        user = message.from_user
+        user_data = [row for row in records if str(row.get('User ID', '')) == str(user.id)]
+        
         await message.answer(
             f"🛠 <b>Тест системы</b>\n"
-            f"User ID: <code>{message.from_user.id}</code>\n"
+            f"User ID: <code>{user.id}</code>\n"
+            f"Username: <code>{user.username or 'не указан'}</code>\n"
             f"Таблица: <code>{sheet.title}</code>\n"
-            f"Записей: <code>{len(sheet.get_all_records())}</code>",
+            f"Всего записей: <code>{len(records)}</code>\n"
+            f"Ваших записей: <code>{len(user_data)}</code>\n"
+            f"Статус: <b>работает нормально</b>",
             parse_mode='HTML'
         )
     except Exception as e:
-        await message.answer(f"❌ Тест не пройден: {e}")
+        logger.error(f"Ошибка в команде /test: {e}")
+        await message.answer(
+            f"❌ <b>Тест не пройден</b>\n"
+            f"Ошибка: <code>{str(e)}</code>\n"
+            f"Проверьте логи для подробностей",
+            parse_mode='HTML'
+        )
 
-# Уникальное решение для проблемы TerminatedByOtherGetUpdates
+# Обработчик прочих текстовых сообщений
+@dp.message_handler(content_types=types.ContentTypes.TEXT)
+async def handle_text(message: types.Message):
+    if message.text.startswith('/'):
+        await message.answer("❌ Неизвестная команда")
+    else:
+        await message.answer("🚫 Я принимаю только YouTube-ссылки")
+        await message.delete()
+
+# Улучшенный запуск бота
 async def run_bot_safely():
-    max_retries = 3
-    retry_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            logger.info(f"Попытка запуска бота (попытка {attempt + 1})")
-            await dp.start_polling()
-            return
-        except Exception as e:
-            logger.error(f"Ошибка запуска (попытка {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-    
-    logger.critical("Не удалось запустить бота после нескольких попыток")
-    raise RuntimeError("Не удалось запустить бота")
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Бот запущен в режиме polling")
+        await dp.start_polling()
+    except Exception as e:
+        logger.critical(f"Ошибка запуска бота: {e}")
+        raise
 
 # Lifespan для FastAPI
 @asynccontextmanager
