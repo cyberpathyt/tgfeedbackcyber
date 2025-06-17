@@ -1,98 +1,72 @@
 import os
 import gspread
-import matplotlib.pyplot as plt
-from io import BytesIO
+import re
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, executor
+from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
-from dotenv import load_dotenv
+from collections import Counter
 import logging
 
-# Настройки
-load_dotenv()
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-ADMINS = os.getenv('ADMINS', '').split(',')
-THROTTLE_RATE = 30  # секунд между сообщениями
-
-# Инициализация
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
-dp.middleware.setup(LoggingMiddleware())
+# Настройка
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Фильтр для YouTube ссылок
+# Инициализация бота
+bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
+
+# Фильтр YouTube ссылок
 class YouTubeFilter(BoundFilter):
     async def check(self, message: types.Message) -> bool:
-        return 'youtube.com' in message.text.lower() or 'youtu.be' in message.text.lower()
+        if not message.text:
+            return False
+        return bool(re.search(
+            r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})',
+            message.text.lower()
+        ))
 
 dp.filters_factory.bind(YouTubeFilter)
-
-# Антиспам
-@dp.message_handler(commands=['stats'], throttle_rate=THROTTLE_RATE)
-@dp.message_handler(YouTubeFilter(), throttle_rate=THROTTLE_RATE)
-async def anti_spam(message: types.Message, throttled: Throttled):
-    if throttled.exceeded_count <= 2:
-        await message.reply("⚠️ Слишком часто! Подождите немного.")
 
 # Подключение к Google Sheets
 def get_sheet():
     gc = gspread.service_account(filename="credentials.json")
     return gc.open_by_url(os.getenv('GOOGLE_SHEET_URL')).sheet1
 
-# Генерация графиков
-async def generate_stats_image(user_id: int):
+def is_recent(date_str, days=30):
+    date = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+    return (datetime.now() - date) < timedelta(days=days)
+
+def get_user_rank(user_id):
     sheet = get_sheet()
-    all_data = sheet.get_all_records()
-    
-    # Фильтрация данных пользователя
-    user_data = [row for row in all_data if str(row['User ID']) == str(user_id)]
-    monthly_data = [row for row in user_data if datetime.now() - datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S') < timedelta(days=30)]
-    
-    # Создание графика
-    plt.figure(figsize=(10, 6))
-    
-    # График активности
-    dates = [datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S') for row in user_data]
-    plt.hist(dates, bins=30, alpha=0.7, label='Ваша активность')
-    
-    plt.title('Ваша активность в боте')
-    plt.xlabel('Дата')
-    plt.ylabel('Количество предложений')
-    plt.legend()
-    
-    # Сохранение в буфер
-    buf = BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    plt.close()
-    return buf
+    data = sheet.get_all_records()
+    counts = Counter(str(row['User ID']) for row in data)
+    sorted_users = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    return [i+1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user_id)][0]
 
-# Команда /stats
+# Антиспам
+@dp.throttled(rate=30)  # 30 секунд между сообщениями
+async def anti_spam(message: types.Message, throttled: Throttled):
+    if throttled.exceeded_count <= 2:
+        await message.reply("⚠️ Ну не флуди, а.")
+
+# Обработчики
 @dp.message_handler(commands=['stats'])
-async def show_stats(message: types.Message):
-    try:
-        # Только для админов
-        if str(message.from_user.id) not in ADMINS:
-            await message.answer("⛔ Эта команда только для администраторов")
-            return
-            
-        image = await generate_stats_image(message.from_user.id)
-        await message.answer_photo(photo=image, caption="📊 Ваша статистика")
-        
-    except Exception as e:
-        logger.error(f"Stats error: {e}")
-        await message.answer("❌ Ошибка генерации статистики")
+async def send_stats(message: types.Message):
+    stats = await generate_stats(message.from_user.id)
+    await message.answer(stats, parse_mode='HTML')
 
-# Обработчик сообщений
 @dp.message_handler(YouTubeFilter())
-async def handle_youtube_link(message: types.Message):
+async def handle_youtube(message: types.Message):
     try:
-        user = message.from_user
-        sheet = get_sheet()
+        # Проверка антиспама
+        await anti_spam(message, None)
         
-        # Запись в таблицу
+        sheet = get_sheet()
+        user = message.from_user
+        
         sheet.append_row([
             user.username or "Аноним",
             user.id,
@@ -100,43 +74,30 @@ async def handle_youtube_link(message: types.Message):
             datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         ])
         
-        # Генерация персональной статистики
-        all_data = sheet.get_all_records()
-        user_entries = len([row for row in all_data if str(row['User ID']) == str(user.id)])
-        monthly_entries = len([row for row in all_data if str(row['User ID']) == str(user.id) and 
-                             datetime.now() - datetime.strptime(row['Date'], '%Y-%m-%d %H:%M:%S') < timedelta(days=30)])
-        
-        # Рейтинг пользователя
-        all_users = {}
-        for row in all_data:
-            uid = str(row['User ID'])
-            all_users[uid] = all_users.get(uid, 0) + 1
-        
-        sorted_users = sorted(all_users.items(), key=lambda x: x[1], reverse=True)
-        user_rank = [i+1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user.id)][0]
-        
-        # Отправка статистики
-        stats_text = f"""
-✅ Ссылка сохранена!
-
-📊 <b>Ваша статистика</b>:
-├ Всего предложений: {user_entries}
-├ За месяц: {monthly_entries}
-└ Рейтинг: {user_rank}-е место из {len(all_users)}
-
-Спасибо за вашу активность! 🚀
-        """
-        await message.answer(stats_text, parse_mode='HTML')
+        stats = await generate_stats(user.id)
+        await message.answer(f"✅ Принято\n{stats}", parse_mode='HTML')
         
     except Exception as e:
-        logger.error(f"Error saving link: {e}")
-        await message.answer("❌ Ошибка сохранения. Попробуйте позже.")
+        logger.error(f"Error: {e}")
+        await message.answer("❌ Не принято")
 
-# Обработчик не-YouTube ссылок
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
-async def handle_non_youtube(message: types.Message):
-    await message.answer("🚫 Это не YouTube-ссылка! Присылайте только ссылки на YouTube.")
+async def handle_other(message: types.Message):
+    await message.answer("🚫 Принимаются только YouTube-ссылки!")
     await message.delete()
+
+async def generate_stats(user_id):
+    sheet = get_sheet()
+    data = sheet.get_all_records()
+    user_data = [row for row in data if str(row['User ID']) == str(user_id)]
+    monthly = len([d for d in user_data if is_recent(d['Date'])])
+    
+    return f"""
+📊 <b>Ваша статистика</b>:
+├ Всего предложений: {len(user_data)}
+├ За месяц: {monthly}
+└ Рейтинг: {get_user_rank(user_id)} место
+"""
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
