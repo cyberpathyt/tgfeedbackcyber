@@ -104,7 +104,7 @@ async def generate_stats(user_id):
 └ Рейтинг: {get_user_rank(user_id)} место
 """
 
-# Запуск бота в фоне
+# Запуск бота
 async def start_bot():
     await dp.start_polling()
 
@@ -114,8 +114,13 @@ async def root():
     return {"status": "Bot is running"}
 
 # Запуск приложения
+async def main():
+    # Создаем задачу для бота
+    bot_task = asyncio.create_task(start_bot())
+    # Запускаем FastAPI
+    config = uvicorn.Config(app, host="0.0.0.0", port=10000)
+    server = uvicorn.Server(config)
+    await server.serve()
+
 if __name__ == "__main__":
-    # Запускаем бота в фоне
-    asyncio.create_task(start_bot())
-    # Запускаем FastAPI на порту 10000
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    asyncio.run(main())
