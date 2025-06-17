@@ -3,7 +3,7 @@ import gspread
 import re
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
 from collections import Counter
@@ -25,11 +25,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота и диспетчера
+# Инициализация бота с явным указанием хранилища
+storage = MemoryStorage()
 bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-Bot.set_current(bot)  # Устанавливаем текущий экземпляр бота
-dp = Dispatcher(bot)
-dp.middleware.setup(LoggingMiddleware())
+Bot.set_current(bot)
+dp = Dispatcher(bot, storage=storage)
 
 class Config:
     """Класс для проверки конфигурации"""
@@ -143,7 +143,8 @@ def get_user_rank(user_id: int) -> int:
         logger.error(f"Ошибка расчета рейтинга: {e}")
         return 0
 
-@dp.throttled(rate=30)
+# Исправленный антиспам с явным указанием хранилища
+@dp.throttled(rate=30, key="default")
 async def anti_spam(message: types.Message, throttled: Throttled):
     """Антиспам защита"""
     if throttled.exceeded_count <= 2:
