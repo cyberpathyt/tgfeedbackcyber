@@ -8,9 +8,10 @@ from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
 from collections import Counter
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import uvicorn
 import asyncio
+from fastapi.responses import JSONResponse
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -104,23 +105,38 @@ async def generate_stats(user_id):
 └ Рейтинг: {get_user_rank(user_id)} место
 """
 
-# Запуск бота
+# Запуск бота с обработкой ошибок
 async def start_bot():
-    await dp.start_polling()
+    try:
+        # Сбрасываем вебхук на случай, если бот был запущен в другом режиме
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Starting bot polling...")
+        await dp.start_polling()
+    except Exception as e:
+        logger.error(f"Bot polling failed: {e}")
+        raise
 
 # FastAPI endpoint для проверки работоспособности
 @app.get("/")
-async def root():
-    return {"status": "Bot is running"}
+async def health_check():
+    return JSONResponse(content={"status": "ok", "bot": "running"})
+
+@app.on_event("startup")
+async def startup_event():
+    # Запускаем бота в фоне
+    asyncio.create_task(start_bot())
+    logger.info("Application startup complete")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Корректно закрываем соединения при завершении
+    await dp.storage.close()
+    await dp.storage.wait_closed()
+    await bot.session.close()
+    logger.info("Application shutdown complete")
 
 # Запуск приложения
-async def main():
-    # Создаем задачу для бота
-    bot_task = asyncio.create_task(start_bot())
-    # Запускаем FastAPI
-    config = uvicorn.Config(app, host="0.0.0.0", port=10000)
-    server = uvicorn.Server(config)
-    await server.serve()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Указываем порт из переменной окружения или используем 10000 по умолчанию
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
