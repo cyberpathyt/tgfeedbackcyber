@@ -2,23 +2,21 @@ import os
 import gspread
 import re
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, executor, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
 from collections import Counter
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 import uvicorn
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Инициализация FastAPI
-app = FastAPI()
 
 # Инициализация бота
 bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
@@ -54,7 +52,7 @@ def get_user_rank(user_id):
     return [i+1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user_id)][0]
 
 # Антиспам
-@dp.throttled(rate=30)  # 30 секунд между сообщениями
+@dp.throttled(rate=30)
 async def anti_spam(message: types.Message, throttled: Throttled):
     if throttled.exceeded_count <= 2:
         await message.reply("⚠️ Ну не флуди, а.")
@@ -106,37 +104,43 @@ async def generate_stats(user_id):
 """
 
 # Запуск бота с обработкой ошибок
-async def start_bot():
+async def run_bot():
     try:
-        # Сбрасываем вебхук на случай, если бот был запущен в другом режиме
+        # Сбрасываем вебхук и удаляем ожидающие обновления
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Starting bot polling...")
         await dp.start_polling()
     except Exception as e:
         logger.error(f"Bot polling failed: {e}")
         raise
+    finally:
+        await dp.storage.close()
+        await dp.storage.wait_closed()
+        await bot.session.close()
 
-# FastAPI endpoint для проверки работоспособности
+# Современный способ обработки событий жизненного цикла FastAPI
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # При старте приложения
+    bot_task = asyncio.create_task(run_bot())
+    logger.info("Application started")
+    
+    yield
+    
+    # При остановке приложения
+    bot_task.cancel()
+    try:
+        await bot_task
+    except asyncio.CancelledError:
+        logger.info("Bot task cancelled successfully")
+    logger.info("Application stopped")
+
+app = FastAPI(lifespan=lifespan)
+
 @app.get("/")
 async def health_check():
     return JSONResponse(content={"status": "ok", "bot": "running"})
 
-@app.on_event("startup")
-async def startup_event():
-    # Запускаем бота в фоне
-    asyncio.create_task(start_bot())
-    logger.info("Application startup complete")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Корректно закрываем соединения при завершении
-    await dp.storage.close()
-    await dp.storage.wait_closed()
-    await bot.session.close()
-    logger.info("Application shutdown complete")
-
-# Запуск приложения
 if __name__ == "__main__":
-    # Указываем порт из переменной окружения или используем 10000 по умолчанию
     port = int(os.getenv("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
