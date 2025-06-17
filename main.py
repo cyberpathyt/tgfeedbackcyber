@@ -5,6 +5,7 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from datetime import datetime
 import json
 from aiohttp import web
+import asyncio
 import logging
 
 # Настройка логирования
@@ -72,20 +73,26 @@ async def save_message(message: types.Message):
         await message.answer("❌ Ошибка при сохранении")
 
 # Веб-сервер для Render
-async def handle(request):
-    return web.Response(text="Bot is running")
+async def web_server():
+    app = web.Application()
+    app.router.add_get('/', lambda request: web.Response(text="Bot is running"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 10000)))
+    await site.start()
+    return runner
 
-app = web.Application()
-app.router.add_get('/', handle)
+async def on_startup(dp):
+    logger.info("Бот запущен")
 
-async def start_bot(app):
-    await dp.skip_updates()
-    await dp.start_polling()
-
-if __name__ == "__main__":
-    # Для локального запуска
-    executor.start_polling(dp, skip_updates=True)
-else:
-    # Для запуска на Render
-    app.on_startup.append(start_bot)
-    web.run_app(app, host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    
+    # Запуск веб-сервера
+    runner = loop.run_until_complete(web_server())
+    
+    # Запуск бота
+    try:
+        executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    finally:
+        loop.run_until_complete(runner.cleanup())
