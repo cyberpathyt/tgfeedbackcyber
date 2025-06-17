@@ -2,7 +2,7 @@ import os
 import gspread
 import re
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, executor, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
@@ -15,7 +15,10 @@ from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Инициализация бота
@@ -36,10 +39,7 @@ class YouTubeFilter(BoundFilter):
             r'(https?://)?(www\.)?youtube\.com/embed/([^&\s]+)'
         ]
         
-        for pattern in patterns:
-            if re.search(pattern, message.text, re.IGNORECASE):
-                return True
-        return False
+        return any(re.search(pattern, message.text, re.IGNORECASE) for pattern in patterns)
 
 dp.filters_factory.bind(YouTubeFilter)
 
@@ -47,27 +47,49 @@ dp.filters_factory.bind(YouTubeFilter)
 def get_sheet():
     try:
         gc = gspread.service_account(filename="credentials.json")
-        return gc.open_by_url(os.getenv('GOOGLE_SHEET_URL')).sheet1
+        sheet_url = os.getenv('GOOGLE_SHEET_URL')
+        if not sheet_url:
+            raise ValueError("GOOGLE_SHEET_URL не установен")
+            
+        sh = gc.open_by_url(sheet_url)
+        worksheet = sh.sheet1
+        logger.info(f"Успешное подключение к таблице: {sh.title}")
+        return worksheet
     except Exception as e:
-        logger.error(f"Google Sheets error: {e}")
+        logger.error(f"Ошибка доступа к Google Sheets: {e}")
         raise
 
-def is_recent(date_str, days=30):
-    try:
-        date = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
-        return (datetime.now() - date) < timedelta(days=days)
-    except ValueError:
+def is_recent(date_str: str, days: int = 30) -> bool:
+    if not date_str:
         return False
+        
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%d.%m.%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S'):
+        try:
+            date = datetime.strptime(date_str, fmt)
+            return (datetime.now() - date) < timedelta(days=days)
+        except ValueError:
+            continue
+    return False
 
-def get_user_rank(user_id):
+def get_user_rank(user_id: int) -> int:
     try:
         sheet = get_sheet()
-        data = sheet.get_all_records()
-        counts = Counter(str(row['User ID']) for row in data)
-        sorted_users = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-        return [i+1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user_id)][0]
+        records = sheet.get_all_records()
+        
+        if not records or 'User ID' not in records[0]:
+            logger.error("Неверная структура таблицы: отсутствует колонка 'User ID'")
+            return 0
+            
+        counts = Counter(str(row['User ID']) for row in records)
+        sorted_users = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        
+        user_id_str = str(user_id)
+        for rank, (uid, _) in enumerate(sorted_users, 1):
+            if uid == user_id_str:
+                return rank
+        return 0
     except Exception as e:
-        logger.error(f"Rank calculation error: {e}")
+        logger.error(f"Ошибка расчета рейтинга: {e}")
         return 0
 
 # Антиспам
@@ -76,26 +98,56 @@ async def anti_spam(message: types.Message, throttled: Throttled):
     if throttled.exceeded_count <= 2:
         await message.reply("⚠️ Пожалуйста, не отправляйте сообщения слишком часто.")
 
-# Обработчики
+# Обработчик команды /stats
 @dp.message_handler(commands=['stats'])
 async def send_stats(message: types.Message):
     try:
-        stats = await generate_stats(message.from_user.id)
+        user = message.from_user
+        logger.info(f"Обработка /stats для пользователя {user.id} ({user.username})")
+        
+        stats = await generate_stats(user.id)
         await message.answer(stats, parse_mode='HTML')
+        
     except Exception as e:
-        logger.error(f"Stats error: {e}")
-        await message.answer("❌ Не удалось получить статистику")
+        logger.error(f"Ошибка в /stats: {e}", exc_info=True)
+        await message.answer(
+            "❌ Не удалось получить статистику\n"
+            "Попробуйте позже или проверьте логи",
+            parse_mode='HTML'
+        )
 
+async def generate_stats(user_id: int) -> str:
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_records()
+        
+        if not records:
+            return "📊 В базе пока нет данных"
+            
+        user_data = [row for row in records if str(row.get('User ID', '')) == str(user_id)]
+        monthly = sum(1 for d in user_data if is_recent(d.get('Date', '')))
+        rank = get_user_rank(user_id)
+        
+        return (
+            f"📊 <b>Ваша статистика</b>:\n"
+            f"├ Всего предложений: <code>{len(user_data)}</code>\n"
+            f"├ За последние 30 дней: <code>{monthly}</code>\n"
+            f"└ Ваш рейтинг: <code>{rank}</code> место"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка генерации статистики: {e}")
+        return "📊 Ошибка при получении статистики"
+
+# Обработчик YouTube ссылок
 @dp.message_handler(YouTubeFilter())
 async def handle_youtube(message: types.Message):
     try:
         await anti_spam(message, None)
         
-        sheet = get_sheet()
         user = message.from_user
+        sheet = get_sheet()
         
-        # Логируем полученную ссылку для отладки
-        logger.info(f"Received YouTube link: {message.text} from {user.username or user.id}")
+        logger.info(f"Новая YouTube ссылка от {user.id}: {message.text}")
         
         sheet.append_row([
             user.username or "Аноним",
@@ -105,54 +157,58 @@ async def handle_youtube(message: types.Message):
         ])
         
         stats = await generate_stats(user.id)
-        await message.answer(f"✅ Ссылка принята!\n{stats}", parse_mode='HTML')
+        await message.answer(f"✅ Ссылка сохранена!\n{stats}", parse_mode='HTML')
         
     except Exception as e:
-        logger.error(f"YouTube handler error: {e}")
-        await message.answer("❌ Произошла ошибка при обработке ссылки")
+        logger.error(f"Ошибка обработки YouTube ссылки: {e}")
+        await message.answer("❌ Не удалось сохранить ссылку")
 
+# Обработчик прочих сообщений
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def handle_other(message: types.Message):
-    logger.info(f"Received non-YouTube message: {message.text}")
-    await message.answer("🚫 Я принимаю только YouTube-ссылки!")
+    logger.info(f"Получено не-Youtube сообщение: {message.text}")
+    await message.answer("🚫 Я принимаю только YouTube-ссылки")
     await message.delete()
 
-async def generate_stats(user_id):
+# Тестовая команда для проверки
+@dp.message_handler(commands=['test'])
+async def test_command(message: types.Message):
     try:
         sheet = get_sheet()
-        data = sheet.get_all_records()
-        user_data = [row for row in data if str(row['User ID']) == str(user_id)]
-        monthly = len([d for d in user_data if is_recent(d['Date'])])
-        
-        return f"""
-📊 <b>Ваша статистика</b>:
-├ Всего предложений: {len(user_data)}
-├ За месяц: {monthly}
-└ Рейтинг: {get_user_rank(user_id)} место
-"""
+        await message.answer(
+            f"🛠 <b>Тест системы</b>\n"
+            f"User ID: <code>{message.from_user.id}</code>\n"
+            f"Таблица: <code>{sheet.title}</code>\n"
+            f"Записей: <code>{len(sheet.get_all_records())}</code>",
+            parse_mode='HTML'
+        )
     except Exception as e:
-        logger.error(f"Generate stats error: {e}")
-        return "📊 Не удалось получить статистику"
+        await message.answer(f"❌ Тест не пройден: {e}")
 
-# Запуск бота
-async def run_bot():
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Bot polling started successfully")
-        await dp.start_polling()
-    except Exception as e:
-        logger.error(f"Bot polling failed: {e}")
-        raise
-    finally:
-        await dp.storage.close()
-        await dp.storage.wait_closed()
-        await bot.session.close()
+# Уникальное решение для проблемы TerminatedByOtherGetUpdates
+async def run_bot_safely():
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info(f"Попытка запуска бота (попытка {attempt + 1})")
+            await dp.start_polling()
+            return
+        except Exception as e:
+            logger.error(f"Ошибка запуска (попытка {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+    
+    logger.critical("Не удалось запустить бота после нескольких попыток")
+    raise RuntimeError("Не удалось запустить бота")
 
 # Lifespan для FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bot_task = asyncio.create_task(run_bot())
-    logger.info("Application started")
+    bot_task = asyncio.create_task(run_bot_safely())
+    logger.info("Сервис запущен")
     
     yield
     
@@ -160,8 +216,14 @@ async def lifespan(app: FastAPI):
     try:
         await bot_task
     except asyncio.CancelledError:
-        logger.info("Bot task cancelled")
-    logger.info("Application stopped")
+        logger.info("Задача бота корректно остановлена")
+    except Exception as e:
+        logger.error(f"Ошибка при остановке бота: {e}")
+    
+    await dp.storage.close()
+    await dp.storage.wait_closed()
+    await bot.session.close()
+    logger.info("Сервис остановлен")
 
 app = FastAPI(lifespan=lifespan)
 
