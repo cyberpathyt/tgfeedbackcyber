@@ -1,6 +1,6 @@
 import os
 import gspread
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from datetime import datetime
 import json
@@ -17,7 +17,7 @@ GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
 if not all([TOKEN, GOOGLE_SHEET_URL, GOOGLE_CREDS_JSON]):
-    logger.error("Отсутствуют необходимые переменные окружения!")
+    logger.error("Не хватает обязательных переменных окружения!")
     raise ValueError("Требуются TELEGRAM_TOKEN, GOOGLE_SHEET_URL и GOOGLE_CREDS_JSON")
 
 bot = Bot(token=TOKEN)
@@ -72,14 +72,14 @@ async def save_message(message: types.Message):
         await message.answer("❌ Ошибка при сохранении")
 
 # Веб-сервер для Render
-async def health_check(request):
+async def handle(request):
     return web.Response(text="Bot is running")
 
 app = web.Application()
-app.router.add_get("/", health_check)
+app.router.add_get('/', handle)
 
-async def on_startup(app):
-    await dp.skip_updates()  # Пропуск накопившихся апдейтов
+async def start_bot(app):
+    await dp.skip_updates()
     await dp.start_polling()
 
 if __name__ == "__main__":
@@ -87,5 +87,5 @@ if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
 else:
     # Для запуска на Render
-    app.on_startup.append(on_startup)
-    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app.on_startup.append(start_bot)
+    web.run_app(app, host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
