@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "tgcyberfeedback",
+  "private_key_id": "16e83a7d6d0632b03f8d512f60e216c7a347d09d",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCv5mYLLZTYEPOR\n5STDqXxDfcnrFbX4tWanrnSwMQNgo82EGJk1vbVv58TQM6W/XjMaoqrsyPtFyaDJ\nHybcsJiQnQHa1L0wU5p7sgokSiD2BRM2mCuipDWJwAdj/3TJojgDsMo/ibZe41OZ\ncwHDJADRl8uBMsPc3NNwPd7BHTGF6n6+YDkPJezzxQrA07o9AHTpfBh0vdM8rxeY\nbyUg5ZjPyyKsn9ei597GxVV/0a7drftminC20z9wn2Q0PQWhxlhxZV8kpGIBPEmj\npqeunfWRpL7vPU5H5EaXAXyJxjw8KvLUjkKv0B6NX/C3Ug/ydyEjXBDS6qAU2ccS\nu3KOwYY1AgMBAAECggEAP9etYNA97kAUz3auJc/9mJdusoLyRZ89b43br1lSwwAg\n5xlwfjdpQ4EJB5I/TdpYTQoOZJu7y4QXdff3CHGWJiK+WhkNw50MfGnN0YcQOIr2\nAsIvUDwubF1EsXA2CLr2fqxrc609gmoa3R6HXLbUDz57b9ynhyGlIl9qWogIgfRU\n1dmG22h/zOnI2d7aNcdiEl6l32yASvLTFoCCHSza5ZRM6TAlrBip4msqBbZfZzrm\ncFIcRbfBICXWn4Rz5k6Jd8vyvfg4VAB8hPVATtIAdZbrkAtGus8SEKcd5ZUPzXyA\nBg661iT81I5NyLI05r9T/QQ7W2zRslMQ68w0k02FvwKBgQDXpHAeiBBV5UPjsbSl\nryHOpI3/r8ICSmNK/IIvIFCSELR8oBOoGYbwEPHrXOS38UMW+slODOJlQpY91E82\ny5Xs700BylaUwWPurOLIAnOrGzPizHNN4P9bEUJuay0cMis4Q6Jtf/Hu3/nKGpSm\nb/gqMS/mn/ajH8P9HwlH7YPuUwKBgQDQ0eEzapvKJvHscgEUR0BNxcv40KroT+wh\nvzmslEOj57sHQrVzRGjWcK1F9Fz722H9bMxAgSPnyjm+oG1eyrYy+DwqVv6wgYkV\np5VL6idAu4KJF/Ka7XrzBt3IAtTieOF5vPVQygkxbl94Fs1E/k9B+k/ZVYD+8QT8\ncfsOaSVYVwKBgFQvRPoWYlI2M9/DM2PvUAJtKWZlRhdA1SykEWq2cd3kGaIBmErq\n1EwKQXeCB2RsEqX49/e5ffTMHv06UkZxCjG6ZlTJmi1upkW6RrqQgnmNIB9tc6I2\nsVnrDgUvYCf+yfKoLNQUu+1mkQy+fcPQOJC4LRwa3N1n/EpoAGaNKhEzAoGAYqDe\nxxQxZPekCFOIYvWMT69+uZSFRJiLJR1WtkaI9B99XN6LKVhEVBSAIqxaRrLFw5bh\nmg3k0ZPYVksbnUwNZmGMuUrBnMhx4QJ4J5T+2To3W10uPzKvgZ3anp+HwTfq9z7i\ndzgVw30oJmZOqamb8cOydypFdSSNgFath47uDp0CgYA6I9MtIXvf5WFY1ru1Zr6h\nR4+2VqBCsned2+UAIjmU6hcXauLUISzBMiTM6nvSKM3IORKDTJAAadSPcuOcuJoN\nrnfgyibYkCl6QCpwbYBhzNIacf7p7hvmipbZKfI9XRlVSiL+P1ouJrgsDUrql5ke\nl0WPKucRZf6IAqyq0394Xw==\n-----END PRIVATE KEY-----\n",
+  "client_email": "cybertgfeedbackbot@tgcyberfeedback.iam.gserviceaccount.com",
+  "client_id": "113943314295764459153",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/cybertgfeedbackbot%40tgcyberfeedback.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
