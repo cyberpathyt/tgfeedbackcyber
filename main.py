@@ -8,10 +8,16 @@ from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
 from collections import Counter
 import logging
+from fastapi import FastAPI
+import uvicorn
+import asyncio
 
-# Настройка
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Инициализация FastAPI
+app = FastAPI()
 
 # Инициализация бота
 bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
@@ -61,7 +67,6 @@ async def send_stats(message: types.Message):
 @dp.message_handler(YouTubeFilter())
 async def handle_youtube(message: types.Message):
     try:
-        # Проверка антиспама
         await anti_spam(message, None)
         
         sheet = get_sheet()
@@ -99,5 +104,18 @@ async def generate_stats(user_id):
 └ Рейтинг: {get_user_rank(user_id)} место
 """
 
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+# Запуск бота в фоне
+async def start_bot():
+    await dp.start_polling()
+
+# FastAPI endpoint для проверки работоспособности
+@app.get("/")
+async def root():
+    return {"status": "Bot is running"}
+
+# Запуск приложения
+if __name__ == "__main__":
+    # Запускаем бота в фоне
+    asyncio.create_task(start_bot())
+    # Запускаем FastAPI на порту 10000
+    uvicorn.run(app, host="0.0.0.0", port=10000)
