@@ -143,16 +143,25 @@ def get_user_rank(user_id: int) -> int:
         logger.error(f"Ошибка расчета рейтинга: {e}")
         return 0
 
-# Исправленный антиспам с явным указанием хранилища
-@dp.throttled(rate=30, key="default")
-async def anti_spam(message: types.Message, throttled: Throttled):
-    """Антиспам защита"""
-    if throttled.exceeded_count <= 2:
+# Новая реализация антиспама без использования throttled
+async def check_spam(message: types.Message):
+    """Проверка на спам с простой задержкой"""
+    user_id = message.from_user.id
+    last_message = storage.data.get(f'spam_{user_id}')
+    
+    if last_message and (datetime.now() - last_message).seconds < 2:
         await message.reply("⚠️ Пожалуйста, не отправляйте сообщения слишком часто.")
+        return True
+    
+    storage.data[f'spam_{user_id}'] = datetime.now()
+    return False
 
 @dp.message_handler(commands=['start', 'help'])
 async def send_help(message: types.Message):
     """Обработчик команд start и help"""
+    if await check_spam(message):
+        return
+        
     help_text = (
         "🤖 <b>YouTube Links Collector Bot</b>\n\n"
         "Просто отправьте мне ссылку на YouTube видео, и я сохраню её в базу.\n\n"
@@ -165,6 +174,9 @@ async def send_help(message: types.Message):
 @dp.message_handler(commands=['stats'])
 async def send_stats(message: types.Message):
     """Обработчик команды stats"""
+    if await check_spam(message):
+        return
+        
     try:
         user = message.from_user
         logger.info(f"Обработка /stats для пользователя {user.id} ({user.username})")
@@ -202,9 +214,10 @@ async def generate_stats(user_id: int) -> str:
 @dp.message_handler(YouTubeFilter())
 async def handle_youtube(message: types.Message):
     """Обработчик YouTube ссылок"""
-    try:
-        await anti_spam(message, None)
+    if await check_spam(message):
+        return
         
+    try:
         user = message.from_user
         sheet = sheets_manager.get_sheet()
         url = message.text.split('?')[0].split('&')[0]
@@ -226,6 +239,9 @@ async def handle_youtube(message: types.Message):
 @dp.message_handler(commands=['test'])
 async def test_command(message: types.Message):
     """Проверка работоспособности бота"""
+    if await check_spam(message):
+        return
+        
     try:
         sheet = sheets_manager.get_sheet()
         records = sheet.get_all_records()
@@ -247,6 +263,9 @@ async def test_command(message: types.Message):
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
 async def handle_text(message: types.Message):
     """Обработчик текстовых сообщений"""
+    if await check_spam(message):
+        return
+        
     if message.text.startswith('/'):
         await message.answer("❌ Неизвестная команда. Используйте /help")
     else:
