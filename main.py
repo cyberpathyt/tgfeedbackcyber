@@ -2,7 +2,7 @@ import os
 import gspread
 import re
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types, exceptions
+from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.dispatcher.filters import BoundFilter
 from aiogram.utils.exceptions import Throttled
@@ -24,6 +24,12 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Инициализация бота и диспетчера
+bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
+Bot.set_current(bot)  # Устанавливаем текущий экземпляр бота
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
 
 class Config:
     """Класс для проверки конфигурации"""
@@ -47,15 +53,9 @@ class Config:
             error_msg = f"Отсутствуют обязательные переменные окружения: {', '.join(missing_vars)}"
             logger.critical(error_msg)
             raise EnvironmentError(error_msg)
-        
         logger.info("Все необходимые переменные окружения найдены")
 
 config = Config()
-
-# Инициализация бота и диспетчера
-bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
-dp = Dispatcher(bot)
-dp.middleware.setup(LoggingMiddleware())
 
 class YouTubeFilter(BoundFilter):
     """Фильтр для YouTube ссылок"""
@@ -232,7 +232,7 @@ async def test_command(message: types.Message):
         
         response = (
             f"🛠 <b>Тест системы</b>\n"
-            f"• Бот: <code>{(await bot.me).username}</code>\n"
+            f"• Бот: <code>{(await bot.get_me()).username}</code>\n"
             f"• Таблица: <code>{sheet.title}</code>\n"
             f"• Записей: <code>{len(records)}</code>\n"
             f"• Ваш ID: <code>{user.id}</code>\n"
