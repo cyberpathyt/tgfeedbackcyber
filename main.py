@@ -39,6 +39,6 @@ async def save_message(message: types.Message):
     
     await message.answer("✅ Подумаем над твоим предложением")
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
