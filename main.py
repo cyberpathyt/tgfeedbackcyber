@@ -9,6 +9,7 @@ from collections import Counter
 import logging
 from fastapi import FastAPI, Request
 import uvicorn
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 
@@ -16,14 +17,10 @@ from fastapi.responses import JSONResponse
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot.log')
-    ]
+    handlers=[logging.StreamHandler(), logging.FileHandler('bot.log')]
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
 storage = MemoryStorage()
 bot = Bot(token=os.getenv('TELEGRAM_TOKEN'))
 Bot.set_current(bot)
@@ -42,9 +39,9 @@ class Config:
             'GS_CLIENT_ID'
         ]
         self.check_config()
-
+        
     def check_config(self):
-        missing = [var for var in self.required_vars if not os.getenv(var)]
+        missing = [v for v in self.required_vars if not os.getenv(v)]
         if missing:
             msg = f"Отсутствуют обязательные переменные окружения: {', '.join(missing)}"
             logger.critical(msg)
@@ -73,7 +70,7 @@ class GoogleSheetsManager:
         self.credentials = self._get_credentials()
         self.sheet_url = os.getenv('GOOGLE_SHEET_URL')
 
-    def _get_credentials(self) -> dict:
+    def _get_credentials(self):
         return {
             "type": os.getenv('GS_TYPE'),
             "project_id": os.getenv('GS_PROJECT_ID'),
@@ -91,24 +88,26 @@ class GoogleSheetsManager:
         try:
             gc = gspread.service_account_from_dict(self.credentials)
             sh = gc.open_by_url(self.sheet_url)
-            ws = sh.sheet1
-            headers = ws.row_values(1)
+            worksheet = sh.sheet1
+            headers = worksheet.row_values(1)
             required = ['Username', 'User ID', 'URL', 'Date']
-            for col in required:
-                if col not in headers:
+            for column in required:
+                if column not in headers:
                     if not headers:
-                        ws.append_row(required)
+                        worksheet.append_row(required)
+                        break
                     else:
-                        ws.update(f'{chr(65 + len(headers))}1', [[col]])
-                    headers.append(col)
-            return ws
+                        col_letter = chr(65 + len(headers))
+                        worksheet.update(f'{col_letter}1', [[column]])
+                        headers.append(column)
+            return worksheet
         except Exception as e:
             logger.error(f"Ошибка доступа к Google Sheets: {e}")
             raise
 
 sheets_manager = GoogleSheetsManager()
 
-def is_recent(date_str: str, days: int = 30) -> bool:
+def is_recent(date_str, days=30):
     if not date_str:
         return False
     for fmt in ('%Y-%m-%d %H:%M:%S', '%d.%m.%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S'):
@@ -136,22 +135,26 @@ async def send_stats(message: types.Message):
         user = message.from_user
         logger.info(f"Обработка /stats для пользователя {user.id} ({user.username})")
         sheet = sheets_manager.get_sheet()
+        headers = sheet.row_values(1)
         records = sheet.get_all_records()
 
-        if not records:
-            await message.answer("📊 В базе пока нет данных", parse_mode='HTML')
-            return
-
-        headers = sheet.row_values(1)
-        user_id_col = headers.index('User ID') if 'User ID' in headers else -1
-        if user_id_col == -1:
+        try:
+            user_id_col = headers.index('User ID')
+        except ValueError:
             await message.answer("❌ Ошибка: нет колонки 'User ID'")
             return
 
-        user_data = [r for r in records if str(r[user_id_col]) == str(user.id)]
-        date_col = headers.index('Date') if 'Date' in headers else None
-        monthly = sum(1 for r in user_data if is_recent(r[date_col])) if date_col else 0
-        all_users = [str(r[user_id_col]) for r in records]
+        try:
+            date_col = headers.index('Date')
+        except ValueError:
+            date_col = None
+
+        user_data = [r for r in records if str(r.get('User ID')) == str(user.id)]
+        monthly = 0
+        if date_col is not None:
+            monthly = sum(1 for r in user_data if is_recent(r.get('Date', '')))
+
+        all_users = [str(r.get('User ID')) for r in records]
         counts = Counter(all_users)
         sorted_users = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
         rank = next((i + 1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user.id)), 0)
@@ -165,8 +168,8 @@ async def send_stats(message: types.Message):
         await message.answer(stats, parse_mode='HTML')
 
     except Exception as e:
-        logger.error(f"Ошибка в /stats: {e}")
-        await message.answer("❌ Не удалось получить статистику. Попробуйте позже.")
+        logger.exception(f"Ошибка в /stats: {e}")
+        await message.answer("❌ Не удалось получить статистику. Проверьте, есть ли данные в таблице.")
 
 @dp.message_handler(YouTubeFilter())
 async def handle_youtube(message: types.Message):
@@ -174,7 +177,6 @@ async def handle_youtube(message: types.Message):
         user = message.from_user
         sheet = sheets_manager.get_sheet()
         url = message.text.split('?')[0].split('&')[0]
-
         headers = sheet.row_values(1)
         data = {
             'Username': user.username or "Аноним",
@@ -186,7 +188,7 @@ async def handle_youtube(message: types.Message):
         sheet.append_row(row)
         await send_stats(message)
     except Exception as e:
-        logger.error(f"Ошибка обработки ссылки: {e}")
+        logger.exception(f"Ошибка обработки ссылки: {e}")
         await message.answer("❌ Ошибка при сохранении ссылки")
 
 @dp.message_handler(commands=['test'])
@@ -195,7 +197,6 @@ async def test_command(message: types.Message):
         sheet = sheets_manager.get_sheet()
         records = sheet.get_all_records()
         user = message.from_user
-
         response = (
             f"🛠 <b>Тест системы</b>\n"
             f"• Бот: <code>{(await bot.get_me()).username}</code>\n"
@@ -206,7 +207,7 @@ async def test_command(message: types.Message):
         )
         await message.answer(response, parse_mode='HTML')
     except Exception as e:
-        logger.error(f"Ошибка в /test: {e}")
+        logger.exception(f"Ошибка в /test: {e}")
         await message.answer("❌ Тест не пройден. Проверьте логи.")
 
 @dp.message_handler(content_types=types.ContentTypes.TEXT)
@@ -245,7 +246,7 @@ async def handle_webhook(request: Request):
         telegram_update = types.Update(**update)
         await dp.process_update(telegram_update)
     except Exception as e:
-        logger.error(f"Ошибка обработки webhook: {e}")
+        logger.exception(f"Ошибка обработки webhook: {e}")
     return {"status": "ok"}
 
 @app.get("/")
