@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher.filters import BoundFilter
-from aiogram.utils.exceptions import Throttled
 from collections import Counter
 import logging
 from fastapi import FastAPI, Request
@@ -97,11 +96,27 @@ class GoogleSheetsManager:
         }
         
     def get_sheet(self):
-        """Возвращает рабочий лист таблицы"""
+        """Возвращает рабочий лист таблицы с проверкой структуры"""
         try:
             gc = gspread.service_account_from_dict(self.credentials)
             sh = gc.open_by_url(self.sheet_url)
-            return sh.sheet1
+            worksheet = sh.sheet1
+            
+            # Проверяем наличие обязательных колонок
+            headers = worksheet.row_values(1)
+            required_columns = ['Username', 'User ID', 'URL', 'Date']
+            
+            for column in required_columns:
+                if column not in headers:
+                    # Создаем недостающие колонки
+                    if not headers:
+                        worksheet.append_row(required_columns)
+                    else:
+                        col_letter = chr(65 + len(headers))  # A, B, C...
+                        worksheet.update(f'{col_letter}1', [[column]])
+                    headers.append(column)
+            
+            return worksheet
         except Exception as e:
             logger.error(f"Ошибка доступа к Google Sheets: {e}")
             raise
@@ -121,29 +136,6 @@ def is_recent(date_str: str, days: int = 30) -> bool:
             continue
     return False
 
-def get_user_rank(user_id: int) -> int:
-    """Возвращает рейтинг пользователя"""
-    try:
-        sheet = sheets_manager.get_sheet()
-        records = sheet.get_all_records()
-        
-        if not records or 'User ID' not in records[0]:
-            logger.error("Неверная структура таблицы: отсутствует колонка 'User ID'")
-            return 0
-            
-        counts = Counter(str(row['User ID']) for row in records)
-        sorted_users = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
-        
-        user_id_str = str(user_id)
-        for rank, (uid, _) in enumerate(sorted_users, 1):
-            if uid == user_id_str:
-                return rank
-        return 0
-    except Exception as e:
-        logger.error(f"Ошибка расчета рейтинга: {e}")
-        return 0
-
-# Новая реализация антиспама без использования throttled
 async def check_spam(message: types.Message):
     """Проверка на спам с простой задержкой"""
     user_id = message.from_user.id
@@ -181,35 +173,47 @@ async def send_stats(message: types.Message):
         user = message.from_user
         logger.info(f"Обработка /stats для пользователя {user.id} ({user.username})")
         
-        stats = await generate_stats(user.id)
-        await message.answer(stats, parse_mode='HTML')
-        
-    except Exception as e:
-        logger.error(f"Ошибка в /stats: {e}")
-        await message.answer("❌ Не удалось получить статистику. Попробуйте позже.")
-
-async def generate_stats(user_id: int) -> str:
-    """Генерирует статистику пользователя"""
-    try:
         sheet = sheets_manager.get_sheet()
         records = sheet.get_all_records()
         
         if not records:
-            return "📊 В базе пока нет данных"
+            await message.answer("📊 В базе пока нет данных", parse_mode='HTML')
+            return
             
-        user_data = [row for row in records if str(row.get('User ID', '')) == str(user_id)]
-        monthly = sum(1 for d in user_data if is_recent(d.get('Date', '')))
-        rank = get_user_rank(user_id)
+        # Получаем индекс колонки User ID
+        headers = sheet.row_values(1)
+        try:
+            user_id_col = headers.index('User ID')
+        except ValueError:
+            await message.answer("❌ Ошибка: в таблице нет колонки 'User ID'")
+            return
+            
+        # Получаем все записи пользователя
+        user_data = [row for row in records if str(row[user_id_col]) == str(user.id)]
         
-        return (
+        # Подсчет статистики
+        date_col = headers.index('Date') if 'Date' in headers else None
+        monthly = 0
+        if date_col:
+            monthly = sum(1 for d in user_data if is_recent(d[date_col]))
+        
+        # Получаем рейтинг
+        all_users = [str(row[user_id_col]) for row in records]
+        counts = Counter(all_users)
+        sorted_users = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+        rank = next((i+1 for i, (uid, _) in enumerate(sorted_users) if uid == str(user.id)), 0)
+        
+        stats = (
             f"📊 <b>Ваша статистика</b>:\n"
             f"├ Всего предложений: <code>{len(user_data)}</code>\n"
             f"├ За последние 30 дней: <code>{monthly}</code>\n"
             f"└ Ваш рейтинг: <code>{rank}</code> место"
         )
+        await message.answer(stats, parse_mode='HTML')
+        
     except Exception as e:
-        logger.error(f"Ошибка генерации статистики: {e}")
-        return "📊 Ошибка при получении статистики"
+        logger.error(f"Ошибка в /stats: {e}")
+        await message.answer("❌ Не удалось получить статистику. Попробуйте позже.")
 
 @dp.message_handler(YouTubeFilter())
 async def handle_youtube(message: types.Message):
@@ -222,15 +226,20 @@ async def handle_youtube(message: types.Message):
         sheet = sheets_manager.get_sheet()
         url = message.text.split('?')[0].split('&')[0]
         
-        sheet.append_row([
-            user.username or "Аноним",
-            user.id,
-            url,
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        ])
+        # Получаем заголовки для правильного порядка колонок
+        headers = sheet.row_values(1)
+        data = {
+            'Username': user.username or "Аноним",
+            'User ID': user.id,
+            'URL': url,
+            'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        stats = await generate_stats(user.id)
-        await message.answer(f"✅ Ссылка сохранена!\n{stats}", parse_mode='HTML')
+        # Формируем строку в правильном порядке
+        row = [data.get(header, '') for header in headers]
+        sheet.append_row(row)
+        
+        await send_stats(message)  # Показываем обновленную статистику
         
     except Exception as e:
         logger.error(f"Ошибка обработки ссылки: {e}")
@@ -289,7 +298,8 @@ async def lifespan(app: FastAPI):
     await setup_webhook()
     logger.info("Сервис запущен")
     yield
-    await bot.session.close()
+    session = await bot.get_session()
+    await session.close()
     logger.info("Сервис остановлен")
 
 app = FastAPI(lifespan=lifespan)
